@@ -360,51 +360,50 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             if '起点桩号' in txt: start_idx = i
             if '终点桩号' in txt: end_idx = i
 
-    # ── 用 ElementTree 精确解析 sheet，替换表头列数值 ──
-    import xml.etree.ElementTree as ET
-    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    # ── 找表头列，替换数值 ──
+    found_cols = {}  # col_letter → 'start' or 'end'
 
     for name in all_files:
         if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
-        try:
-            root = ET.fromstring(all_files[name])
-            sd = root.find(f'{ns}sheetData')
-            if sd is None: continue
-            # 记录找到的列
-            cols = {}  # col_letter → 'start' or 'end'
-            for row in sd.findall(f'{ns}row'):
-                for c in row.findall(f'{ns}c'):
-                    v_el = c.find(f'{ns}v')
-                    if v_el is not None and v_el.text and c.get('t') == 's' and v_el.text.strip().isdigit():
-                        idx = int(v_el.text)
-                        col_letter = re.match(r'([A-Z]+)', c.get('r', '')).group(1)
-                        if idx == start_idx: cols[col_letter] = 'start'
-                        elif idx == end_idx: cols[col_letter] = 'end'
+        text = all_files[name].decode('utf-8')
 
-            if cols:
-                # 重新遍历，替换数值
-                for row in sd.findall(f'{ns}row'):
-                    for c in row.findall(f'{ns}c'):
-                        ref = c.get('r', '')
-                        cl = re.match(r'([A-Z]+)', ref).group(1)
-                        if cl in cols and c.get('t') != 's':
-                            v_el = c.find(f'{ns}v')
-                            if v_el is not None and v_el.text and re.match(r'[\d.]+$', v_el.text):
-                                nv = new_s if cols[cl] == 'start' else new_e
-                                v_el.text = nv
+        # 方法1: 通过 shared strings 索引找
+        for idx, typ in [(start_idx, 'start'), (end_idx, 'end')]:
+            if idx is not None:
+                for m in re.finditer(rf'<c[^>]*r="([A-Z]+)\d+"[^>]*t="s"[^>]*?><v>{idx}</v>', text):
+                    found_cols[m.group(1)] = typ
 
-            all_files[name] = ET.tostring(root, xml_declaration=True, encoding='UTF-8')
-        except:
-            # 如果 ElementTree 解析失败，用原来方法
+        # 方法2: 直接在文本中搜表头文字
+        for m in re.finditer(r'<t>(起[^\s<]*[桩位].*?桩号|起点桩号)</t>', text):
+            found_cols[m.group(1)] = 'start'
+        for m in re.finditer(r'<t>(终[^\s<]*[桩位].*?桩号|终点桩号)</t>', text):
+            found_cols[m.group(1)] = 'end'
+
+        # 替换已找到的列
+        if found_cols:
+            for cl, typ in found_cols.items():
+                nv = new_s if typ == 'start' else new_e
+                def _rn(m2, nv2=nv):
+                    x = m2.group(0)
+                    if 't="s"' in x: return x
+                    return m2.group(1) + nv2 + m2.group(2)
+                text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _rn, text)
+
+        all_files[name] = text.encode('utf-8')
+
+    # 方法3: 如果以上都没找到，硬编码 D列=起点，F列=终点（95%的模板都是这）
+    if not found_cols:
+        import sys as _sys
+        _sys.stderr.write("⚠️ 未找到表头列，使用默认D/F列\n")
+        for name in all_files:
+            if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
             text = all_files[name].decode('utf-8')
-            for idx, nv in [(start_idx, new_s), (end_idx, new_e)]:
-                if idx is None: continue
-                m = re.search(rf'<c[^>]*r="([A-Z]+)\d+"[^>]*t="s"[^>]*?><v>{idx}</v>', text)
-                if m:
-                    cl = m.group(1)
-                    def _r2(m2, nv2=nv):
-                        return m2.group(1) + nv2 + m2.group(2) if 't="s"' not in m2.group(0) else m2.group(0)
-                    text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _r2, text)
+            for cl, nv in [('D', new_s), ('F', new_e)]:
+                def _rn3(m2, nv3=nv):
+                    x = m2.group(0)
+                    if 't="s"' in x: return x
+                    return m2.group(1) + nv3 + m2.group(2)
+                text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _rn3, text)
             all_files[name] = text.encode('utf-8')
 
     # ── 封面 B12/H15 改为 inlineStr ──
@@ -498,7 +497,7 @@ def _gen_one_zip(template_path, output_path, line, rock, sub_item,
                 nv = nv if typ == 'start' else str(int(new_e)) if new_e == int(new_e) else str(new_e)
                 def _rpl(m, v=nv):
                     x = m.group(0)
-                    if 't="s"' in x or '<f>' in x: return x  # 跳过公式和共享字符串
+                    if 't="s"' in x: return x  # 跳过公式和共享字符串
                     return m.group(1) + v + m.group(2)
                 text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _rpl, text)
             all_files[name] = text.encode('utf-8')
