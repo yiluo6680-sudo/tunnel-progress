@@ -324,48 +324,38 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
             new_s_val = int(nsv) if nsv == int(nsv) else nsv
             new_e_val = int(nev) if nev == int(nev) else nev
-
             import re as _re
 
-            # 2. 遍历每个 sheet 每个单元格
+            # 2. 遍历每个 sheet
             for sh in wb.Worksheets:
                 try:
-                    used = sh.UsedRange
-                    if used is None: continue
-
-                    # 先找所有表头列：扫描前30行，前30列
-                    col_headers = {}  # col_number → header_text
-                    for rr in range(1, min(30, used.Rows.Count + 1)):
-                        for cc in range(1, min(30, used.Columns.Count + 1)):
-                            cv = sh.Cells(rr, cc).Value
-                            if cv is not None and isinstance(cv, str):
-                                cv_str = str(cv).strip()
-                                if '起点桩号' in cv_str:
-                                    col_headers[cc] = 'start'
-                                elif '终点桩号' in cv_str:
-                                    col_headers[cc] = 'end'
-
-                    # 遍历每个单元格
-                    for r in range(1, used.Rows.Count + 1):
-                        for c in range(1, used.Columns.Count + 1):
+                    sh_name = sh.Name
+                    if sh_name == '封面':
+                        continue  # 封面已处理
+                    # 遍历所有单元格找表头
+                    for r in range(1, 500):
+                        for c in range(1, 100):
                             try:
                                 v = sh.Cells(r, c).Value
                                 if v is None: continue
-
-                                # 如果是字符串，替换旧桩号文本
+                                # 找到"起点桩号"→ 该列以下所有数值换成新起点值
+                                if isinstance(v, str) and '起点桩号' in str(v):
+                                    for rr in range(r + 1, 500):
+                                        cv = sh.Cells(rr, c).Value
+                                        if cv is not None and isinstance(cv, (int, float)):
+                                            sh.Cells(rr, c).Value = new_s_val
+                                # 找到"终点桩号"→ 该列以下所有数值换成新终点值
+                                if isinstance(v, str) and '终点桩号' in str(v):
+                                    for rr in range(r + 1, 500):
+                                        cv = sh.Cells(rr, c).Value
+                                        if cv is not None and isinstance(cv, (int, float)):
+                                            sh.Cells(rr, c).Value = new_e_val
+                                # 替换字符串中的旧桩号
                                 if isinstance(v, str):
-                                    old_ch = _re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', v)
+                                    old_ch = _re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', str(v))
                                     if old_ch:
                                         new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
-                                        sh.Cells(r, c).Value = v.replace(old_ch.group(), new_ch)
-
-                                # 如果是数值，检查该列是否有表头
-                                elif isinstance(v, (int, float)):
-                                    if c in col_headers:
-                                        if col_headers[c] == 'start':
-                                            sh.Cells(r, c).Value = new_s_val
-                                        elif col_headers[c] == 'end':
-                                            sh.Cells(r, c).Value = new_e_val
+                                        sh.Cells(r, c).Value = str(v).replace(old_ch.group(), new_ch)
                             except:
                                 pass
                 except:
@@ -375,7 +365,7 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             wb.Close()
             excel.Quit()
             return
-        except Exception:
+        except Exception as e:
             pass  # 失败则 fallback
 
     # ── macOS / fallback ──
