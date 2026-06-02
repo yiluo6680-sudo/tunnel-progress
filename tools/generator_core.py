@@ -295,146 +295,137 @@ def generate_segment_files(
 
 def _gen_one(template_path, output_path, line, rock, sub_item,
              start_disp, end_disp, length, start_num, end_num, wh_number, ch_prefix="K"):
-    """复制模板 → 全表查找替换桩号和编号
+    """复制模板 → 只改封面B12/H15 + 全表替换旧桩号/编号
 
-    对 xlsx 内所有 XML 文件中的旧桩号、旧编号进行全文替换，
-    确保证书、单简等所有 sheet 的桩号和编号都更新。
-    同时把封面 B12/H15 改为 inlineStr 模式。
+    Windows: 优先用 win32com 调 Excel（格式100%不变）
+    macOS:   用 zipfile 直接操作 XML
     """
+    import shutil, os, sys
     seg_name = f"田头山隧道{line}-洞身衬砌({ch_prefix}{start_disp}～{ch_prefix}{end_disp})({length:.2f}m，{rock})"
     name_value = f"分项工程名称：{seg_name}-{sub_item}"
 
-    import zipfile, re
-    from copy import deepcopy
-
     shutil.copy2(template_path, output_path)
+    abs_path = os.path.abspath(output_path)
 
-    with zipfile.ZipFile(output_path, 'r') as zin:
-        all_files = {name: zin.read(name) for name in zin.namelist()}
+    # ── Windows: 用 Excel 自身修改，格式零改动 ──
+    if sys.platform == 'win32':
+        try:
+            import win32com.client as win32
+            excel = win32.DispatchEx("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            wb = excel.Workbooks.Open(abs_path)
+            ws = wb.Worksheets("封面")
+            ws.Cells(12, 2).Value = name_value   # B12
+            ws.Cells(15, 8).Value = wh_number    # H15
+            # 全表查找替换旧桩号字符串
+            old_b12 = str(ws.Cells(12, 2).Value)
+            ch_m = __import__('re').search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
+            if ch_m:
+                new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
+                ws.Cells.Replace(What=ch_m.group(), Replacement=new_ch, LookAt=1)
+            wb.Save()
+            wb.Close()
+            excel.Quit()
+            return
+        except ImportError:
+            pass  # 没有 win32com → zipfile 方案
 
-    # ── 0. 从模板中提取旧桩号、旧编号 ──
+    # ── macOS / fallback ──
+    _gen_one_zip(template_path, output_path, line, rock, sub_item,
+                 start_disp, end_disp, length, start_num, end_num, wh_number, ch_prefix,
+                 seg_name, name_value)
+
+
+def _gen_one_zip(template_path, output_path, line, rock, sub_item,
+                 start_disp, end_disp, length, start_num, end_num, wh_number, ch_prefix,
+                 seg_name, name_value):
+    """zipfile + ElementTree 方案（macOS / win32com 不可用时）"""
+    import zipfile, re, xml.etree.ElementTree as ET
     old_chainage = None
     old_wh = None
     ss_texts = []
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
-    ss_xml = all_files.get('xl/sharedStrings.xml', b'')
-    if ss_xml:
-        ss_texts = _parse_shared_strings(ss_xml)
-        sheet1 = all_files.get('xl/worksheets/sheet1.xml', b'').decode('utf-8')
+    with zipfile.ZipFile(output_path, 'r') as zin:
+        all_files = {n: zin.read(n) for n in zin.namelist()}
 
-        # B12 → 旧桩号
-        m = re.search(r'<c[^>]*r="B12"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet1)
-        if m:
-            idx = int(m.group(1))
-            if idx < len(ss_texts):
-                old_b12 = ss_texts[idx]
-                # 提取桩号：K87+492.00～K87+675.00 / ZK87+492～ZK87+675
-                ch_m = re.search(r'([ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+)', old_b12)
-                if ch_m:
-                    old_chainage = ch_m.group(1)
-                # 提取旧编号
-                wh_m = re.search(r'WH3A4[\d-]+', old_b12)
-                if wh_m:
-                    old_wh = wh_m.group(0)
+    ss_data = all_files.get('xl/sharedStrings.xml', b'')
+    if ss_data:
+        sr = ET.fromstring(ss_data)
+        for si in sr.findall(f'{{{ns}}}si'):
+            t = si.find(f'{{{ns}}}t')
+            if t is not None and t.text:
+                ss_texts.append(t.text)
+            else:
+                parts = [r.find(f'{{{ns}}}t').text or '' for r in si.findall(f'{{{ns}}}r') if r.find(f'{{{ns}}}t') is not None and r.find(f'{{{ns}}}t').text]
+                ss_texts.append(''.join(parts))
 
-        if not old_wh:
-            m = re.search(r'<c[^>]*r="H15"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet1)
-            if m:
-                idx = int(m.group(1))
-                if idx < len(ss_texts):
-                    wh_match = re.search(r'WH3A4[\d-]+', ss_texts[idx])
-                    if wh_match:
-                        old_wh = wh_match.group(0)
+    s1 = all_files.get('xl/worksheets/sheet1.xml', b'').decode()
+    m = re.search(r'<c[^>]*r="B12"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', s1)
+    if m and ss_texts:
+        old_b12 = ss_texts[int(m.group(1))]
+        cm = re.search(r'([ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+)', old_b12)
+        if cm: old_chainage = cm.group(1)
+        wm = re.search(r'WH3A4[\d-]+', old_b12)
+        if wm: old_wh = wm.group(0)
 
     new_chainage = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
-
-    # ── 0b. 从旧桩号提取起终点数值（保留小数，匹配int/float两种格式） ──
-    old_start_num = old_end_num = None
-    old_start_float = old_end_float = None
-    if old_chainage:
-        parts = re.findall(r'(\d+)\+([\d.]+)', old_chainage)
-        if len(parts) >= 2:
-            s_val = int(parts[0][0]) * 1000 + float(parts[0][1])
-            e_val = int(parts[1][0]) * 1000 + float(parts[1][1])
-            old_start_float = s_val
-            old_end_float = e_val
-            old_start_num = int(s_val) if s_val == int(s_val) else s_val
-            old_end_num = int(e_val) if e_val == int(e_val) else e_val
     new_s = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
     new_e = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
-    new_start_num = int(new_s) if new_s == int(new_s) else new_s
-    new_end_num = int(new_e) if new_e == int(new_e) else new_e
 
-    # ── 1. 全表查找替换（字符串） ──
-    for name, content in all_files.items():
-        if not name.endswith('.xml'):
-            continue
-        text = content.decode('utf-8')
-
-        if old_chainage:
-            text = text.replace(old_chainage, new_chainage)
-        if old_wh and old_wh != wh_number:
-            text = text.replace(old_wh, wh_number)
-
-        all_files[name] = text.encode('utf-8')
-
-    # ── 2. 按表头列替换数值桩号 ──
-    # 找出哪些列是起点/终点桩号，然后把该列所有数值都替换
-    new_s_str = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
-    new_e_str = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
-
-    for name in list(all_files.keys()):
-        if 'worksheets/sheet' not in name or not name.endswith('.xml'):
-            continue
-        text = all_files[name].decode('utf-8')
-
-        # 找表头：遍历所有 t="s" 的单元格，看内容是否匹配
-        col_map = {}
-        for m in re.finditer(r'<c[^>]*r="([A-Z]+)(\d+)"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', text):
-            col_letter = m.group(1)
-            ss_idx = int(m.group(3))
-            if ss_idx < len(ss_texts):
-                txt = ss_texts[ss_idx]
-                if '起点桩号' in txt:
-                    col_map[col_letter] = 'start'
-                elif '终点桩号' in txt:
-                    col_map[col_letter] = 'end'
-
-        if col_map:
-            # 对起点/终点列：所有数值型单元格（不含 t="s"）都替换
-            for col_letter, typ in col_map.items():
-                new_val = new_s_str if typ == 'start' else new_e_str
-                # 用 lambda 保证不处理共享字符串单元格
-                def _replacer(m, nv=new_val):
-                    return m.group(1) + nv + m.group(2) if 't="s"' not in m.group(0) else m.group(0)
-                text = re.sub(
-                    rf'(<c[^>]*r="{col_letter}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)',
-                    _replacer,
-                    text
-                )
-
-        all_files[name] = text.encode('utf-8')
-
-    # ── 2. 封面 B12/H15 改为 inlineStr（确保值正确） ──
-    sheet1_path = None
     for name in all_files:
-        if name.startswith('xl/worksheets/sheet') and name.endswith('.xml'):
-            sheet1_path = name
-            break
+        if not name.endswith('.xml'): continue
+        text = all_files[name].decode('utf-8')
+        if old_chainage: text = text.replace(old_chainage, new_chainage)
+        if old_wh and old_wh != wh_number: text = text.replace(old_wh, wh_number)
+        all_files[name] = text.encode('utf-8')
 
-    if sheet1_path:
-        xml = all_files[sheet1_path].decode('utf-8')
-        for ref, new_val in [('B12', name_value), ('H15', wh_number)]:
-            escaped = _xml_escape(new_val)
-            cell_match = re.search(rf'<c[^>]*?r="{ref}"[^>]*?>.*?</c>', xml, re.DOTALL)
-            if cell_match:
-                full_cell = cell_match.group()
-                new_cell = full_cell.replace('t="s"', 't="inlineStr"', 1)
-                new_cell = re.sub(r'>.*?</c>', f'><is><t>{escaped}</t></is></c>', new_cell, count=1, flags=re.DOTALL)
-                xml = xml.replace(full_cell, new_cell, 1)
-        all_files[sheet1_path] = xml.encode('utf-8')
+    # ElementTree 解析，按表头列替换
+    col_map = {}
+    for name in all_files:
+        if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
+        try:
+            root = ET.fromstring(all_files[name])
+            sd = root.find(f'{{{ns}}}sheetData')
+            if sd is None: continue
+            for row in sd.findall(f'{{{ns}}}row'):
+                for c in row.findall(f'{{{ns}}}c'):
+                    ref = c.get('r', '')
+                    v_el = c.find(f'{{{ns}}}v')
+                    if v_el is not None and v_el.text and c.get('t') == 's' and v_el.text.isdigit():
+                        idx = int(v_el.text)
+                        if idx < len(ss_texts):
+                            col_letter = re.match(r'([A-Z]+)', ref).group(1)
+                            if '起点桩号' in ss_texts[idx]: col_map[col_letter] = 'start'
+                            elif '终点桩号' in ss_texts[idx]: col_map[col_letter] = 'end'
+        except: pass
 
-    # 重新打包
+    if col_map:
+        for name in all_files:
+            if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
+            text = all_files[name].decode('utf-8')
+            for cl, typ in col_map.items():
+                nv = str(int(new_s)) if new_s == int(new_s) else str(new_s)
+                nv = nv if typ == 'start' else str(int(new_e)) if new_e == int(new_e) else str(new_e)
+                def _rpl(m, v=nv):
+                    return m.group(1) + v + m.group(2) if 't="s"' not in m.group(0) else m.group(0)
+                text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _rpl, text)
+            all_files[name] = text.encode('utf-8')
+
+    # 封面 inlineStr
+    s1_path = next((n for n in all_files if 'worksheets/sheet' in n and n.endswith('.xml')), None)
+    if s1_path:
+        xml = all_files[s1_path].decode('utf-8')
+        for ref, nv in [('B12', name_value), ('H15', wh_number)]:
+            ev = _xml_escape(nv)
+            m = re.search(rf'<c[^>]*?r="{ref}"[^>]*?>.*?</c>', xml, re.DOTALL)
+            if m:
+                nc = m.group().replace('t="s"', 't="inlineStr"', 1)
+                nc = re.sub(r'>.*?</c>', f'><is><t>{ev}</t></is></c>', nc, count=1, flags=re.DOTALL)
+                xml = xml.replace(m.group(), nc, 1)
+        all_files[s1_path] = xml.encode('utf-8')
+
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in all_files.items():
             zout.writestr(name, data)
