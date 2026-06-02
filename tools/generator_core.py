@@ -389,14 +389,44 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             # "K87+492.00～K87+675.00" → "K87+252.00～K87+285.00"
             text = text.replace(old_chainage, new_chainage)
 
-        # 替换数值桩号（int: 87492 / float: 87671.5）
-        if old_start_float is not None and 'worksheets/sheet' in name:
-            new_s = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
-            new_e = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
-            for ov in set([str(old_start_float), str(int(old_start_float))]):
-                text = re.sub(f'<v>{re.escape(ov)}</v>', new_s, text, flags=re.IGNORECASE)
-            for ov in set([str(old_end_float), str(int(old_end_float))]):
-                text = re.sub(f'<v>{re.escape(ov)}</v>', new_e, text, flags=re.IGNORECASE)
+        # 按表头找数值桩号：找到"起点桩号""终点桩号"所在列，替换其下方数值
+        if 'worksheets/sheet' in name and ss_texts:
+            # 解析 sheet XML 中的 cell 引用和值
+            sheet_xml = text
+            # 先用 shared strings 翻译表头
+            header_cols = {}  # col_letter → type ('start' or 'end')
+            for m_cell in re.finditer(r'<c[^>]*r="([A-Z]+)(\d+)"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet_xml):
+                col, row, ss_idx = m_cell.group(1), int(m_cell.group(2)), int(m_cell.group(3))
+                if ss_idx < len(ss_texts):
+                    txt = ss_texts[ss_idx]
+                    if '起点桩号' in txt or '起点' in txt:
+                        header_cols[col] = 'start'
+                    elif '终点桩号' in txt or '终点' in txt:
+                        header_cols[col] = 'end'
+
+            if header_cols:
+                new_s = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
+                new_e = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
+                old_vals = [
+                    str(old_start_float) if old_start_float is not None else '',
+                    str(int(old_start_float)) if old_start_float is not None and old_start_float == int(old_start_float) else '',
+                    str(old_end_float) if old_end_float is not None else '',
+                    str(int(old_end_float)) if old_end_float is not None and old_end_float == int(old_end_float) else '',
+                ]
+                for col, typ in header_cols.items():
+                    new_val = new_s if typ == 'start' else new_e
+                    # 旧值的两种格式：87492.0 和 87492
+                    old_candidates = [
+                        old_vals[0] if typ == 'start' else old_vals[2],  # 浮点格式
+                        old_vals[1] if typ == 'start' else old_vals[3],  # 整数格式
+                    ]
+                    for old_val in set(v for v in old_candidates if v):
+                        sheet_xml = re.sub(
+                            rf'(<c[^>]*r="{col}\d+"[^>]*?>.*?<v>){re.escape(old_val)}(</v>)',
+                            lambda m: m.group(1) + str(new_val) + m.group(2),
+                            sheet_xml
+                        )
+                text = sheet_xml
 
         all_files[name] = text.encode('utf-8')
 
