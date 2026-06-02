@@ -62,10 +62,9 @@ DEFAULT_WH_SCHEMES = {
 }
 
 # ── 路径配置（默认值，可在界面修改） ─────────────────────────────
-# Windows 用网络路径 \\192.168.1.28\H\1深圳龙华片区\...
-# macOS 用 /Volumes/192.168.1.28/1深圳龙华片区/...
+# Windows 用 H 盘映射路径，macOS 用 /Volumes/
 if os.name == 'nt':  # Windows
-    DEFAULT_TEMPLATE_SOURCE = r"\\192.168.1.28\H\1深圳龙华片区\外环高速三期\合约\分项完工计量\正式版本"
+    DEFAULT_TEMPLATE_SOURCE = r"H:\1深圳龙华片区\外环高速三期\合约\分项完工计量\正式版本"
 else:  # macOS / Linux
     DEFAULT_TEMPLATE_SOURCE = "/Volumes/192.168.1.28/1深圳龙华片区/外环高速三期/合约/分项完工计量/正式版本"
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")

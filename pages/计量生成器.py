@@ -39,53 +39,46 @@ def _infer_name(filename):
 st.title("📋 分项完工计量 · 模板化批量生成")
 st.caption("外环高速三期第4合同段 · 田头山隧道")
 
-# 模板源
-with st.expander("📂 模板目录", expanded=not st.session_state.get("template_index")):
-    # 第一行：直接输入
-    col_inp, col_scan = st.columns([4, 1])
-    with col_inp:
-        ts = st.text_input("直接输入路径", value=st.session_state.template_source, key="ts_inp",
-            placeholder="如 H:\正式版本 或 \\\\192.168.1.28\H\...")
-    with col_scan:
-        st.write("")
-        if st.button("🔄 扫描", use_container_width=True):
-            with st.spinner("扫描中..."):
-                r = scan_and_build_templates(source_path=ts)
-                if "error" in r:
-                    st.error(r["error"])
-                else:
-                    st.success(f"✅ {r['templates_count']} 个模板")
-                    st.session_state.template_index = r.get("templates", {})
-    st.session_state.template_source = ts
+# 模板目录：第一行输入，第二行导航选择
+st.markdown("##### 📂 模板目录")
+col_inp, col_scan = st.columns([4, 1])
+with col_inp:
+    ts = st.text_input("直接输入路径", value=st.session_state.template_source, key="ts_inp")
+with col_scan:
+    st.write("")
+    if st.button("🔄 扫描", use_container_width=True):
+        with st.spinner("扫描中..."):
+            r = scan_and_build_templates(source_path=ts)
+            if "error" in r:
+                st.error(r["error"])
+            else:
+                st.success(f"✅ {r['templates_count']} 个模板")
+                st.session_state.template_index = r.get("templates", {})
+st.session_state.template_source = ts
 
-    # 第二行：导航选择
-    if ts and os.path.isdir(ts):
-        st.markdown(f"**当前: {ts}**")
-        # 获取子目录列表 + 上级目录
-        nav_dirs = []
-        parent = os.path.dirname(os.path.normpath(ts))
-        if parent and parent != ts:
-            nav_dirs.append((".. [返回上级]", parent))
-        try:
-            subs = sorted([d for d in os.listdir(ts)
-                if os.path.isdir(os.path.join(ts, d)) and not d.startswith('.')
-                and not d.startswith('~') and not d.startswith('$')])
-            for d in subs[:30]:
-                nav_dirs.append((f"📁 {d}", os.path.join(ts, d)))
-        except:
-            pass
-
-        if nav_dirs:
-            sel_nav = st.selectbox("导航选择", [d[0] for d in nav_dirs], key="nav_sel")
-            col_go, col_cur = st.columns([1, 3])
-            with col_go:
-                if st.button("进入", use_container_width=True):
-                    for label, path in nav_dirs:
-                        if label == sel_nav:
-                            st.session_state.template_source = path
-                            st.rerun()
-            with col_cur:
-                st.caption("选择子目录后点「进入」")
+if ts and os.path.isdir(ts):
+    nav_opts = []
+    parent = os.path.dirname(os.path.normpath(ts))
+    if parent and parent != ts:
+        nav_opts.append(("📂 .. 返回上级", parent))
+    try:
+        for d in sorted(os.listdir(ts)):
+            p = os.path.join(ts, d)
+            if os.path.isdir(p) and not d.startswith(('.', '~', '$')):
+                nav_opts.append((f"📁 {d}", p))
+    except:
+        pass
+    if nav_opts:
+        col_s, col_g = st.columns([4, 1])
+        with col_s:
+            sel = st.selectbox("选择子目录（导航）", [n[0] for n in nav_opts], key="ts_nav")
+        with col_g:
+            st.write("")
+            if st.button("➡️ 进入", use_container_width=True):
+                for lbl, pth in nav_opts:
+                    if lbl == sel:
+                        st.session_state.template_source = pth
+                        st.rerun()
 
 idx = st.session_state.template_index
 if not idx:
