@@ -1,0 +1,19 @@
+# 虚拟环境
+.venv/
+venv/
+.env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 生成的数据
+data/generated_test/
+
+# 模板缓存（从SMB复制到本地的，不用上传）
+tools/templates/
+
+# 系统文件
+.DS_Store
+Thumbs.db
