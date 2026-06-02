@@ -315,15 +315,49 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             excel.Visible = False
             excel.DisplayAlerts = False
             wb = excel.Workbooks.Open(abs_path)
+
+            # 封面 B12/H15
             ws = wb.Worksheets("封面")
-            ws.Cells(12, 2).Value = name_value   # B12
-            ws.Cells(15, 8).Value = wh_number    # H15
-            # 全表查找替换旧桩号字符串
+            ws.Cells(12, 2).Value = name_value
+            ws.Cells(15, 8).Value = wh_number
+
+            # 提取旧桩号字符串
             old_b12 = str(ws.Cells(12, 2).Value)
-            ch_m = __import__('re').search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
+            __import__('re')
+            import re
+            ch_m = re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
             if ch_m:
                 new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
-                ws.Cells.Replace(What=ch_m.group(), Replacement=new_ch, LookAt=1)
+                # 全表替换旧桩号字符串
+                for sh in wb.Worksheets:
+                    sh.Cells.Replace(What=ch_m.group(), Replacement=new_ch, LookAt=1)
+
+            # 遍历所有 sheet，找到"起点桩号""终点桩号"列，整列替换数值
+            nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
+            nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
+            for sh in wb.Worksheets:
+                used = sh.UsedRange
+                # 找表头行和列
+                start_col = None
+                end_col = None
+                for r in range(1, used.Rows.Count + 1):
+                    for c in range(1, used.Columns.Count + 1):
+                        v = sh.Cells(r, c).Value
+                        if v is None: continue
+                        sv = str(v)
+                        if '起点桩号' in sv: start_col = c
+                        if '终点桩号' in sv: end_col = c
+                # 替换这些列所有数值（跳过表头行）
+                for r in range(1, used.Rows.Count + 1):
+                    if start_col:
+                        cv = sh.Cells(r, start_col).Value
+                        if cv is not None and isinstance(cv, (int, float)):
+                            sh.Cells(r, start_col).Value = nsv
+                    if end_col:
+                        cv = sh.Cells(r, end_col).Value
+                        if cv is not None and isinstance(cv, (int, float)):
+                            sh.Cells(r, end_col).Value = nev
+
             wb.Save()
             wb.Close()
             excel.Quit()
