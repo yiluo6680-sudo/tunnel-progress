@@ -45,6 +45,10 @@ ROCK_SUB_ITEMS = {
               "喷射砼支护", "锚杆支护", "钢筋网支护", "钢架支护",
               "衬砌钢筋加工及安装", "衬砌砼",
               "仰拱钢筋加工及安装", "仰拱砼", "仰拱回填"],
+    "S-Ⅳc": ["洞身开挖",
+              "喷射砼支护", "锚杆支护", "钢筋网支护", "钢架支护",
+              "衬砌钢筋加工及安装", "衬砌砼",
+              "仰拱钢筋加工及安装", "仰拱砼", "仰拱回填"],
     "S-Ⅲ":  ["洞身开挖",
               "喷射砼支护", "锚杆支护", "钢筋网支护", "钢架支护",
               "衬砌钢筋加工及安装", "衬砌砼"],
@@ -181,12 +185,12 @@ def load_template_index():
 
 
 def _extract_rock(text):
-    for r in ["S-Ⅴa", "S-Ⅴb", "S-Ⅴc", "S-Ⅳa", "S-Ⅳb", "S-Ⅲ",
-              "S-Va", "S-Vb", "S-Vc", "S-IVa", "S-IVb", "S-III",
+    for r in ["S-Ⅴa", "S-Ⅴb", "S-Ⅴc", "S-Ⅳa", "S-Ⅳb", "S-Ⅳc", "S-Ⅲ",
+              "S-Va", "S-Vb", "S-Vc", "S-IVa", "S-IVb", "S-IVc", "S-III",
               "Ⅴ级", "Ⅳ级", "Ⅲ级"]:
         if r in text:
             return r.replace("S-Va","S-Ⅴa").replace("S-Vb","S-Ⅴb").replace("S-Vc","S-Ⅴc")\
-                     .replace("S-IVa","S-Ⅳa").replace("S-IVb","S-Ⅳb").replace("S-III","S-Ⅲ")
+                     .replace("S-IVa","S-Ⅳa").replace("S-IVb","S-Ⅳb").replace("S-IVc","S-Ⅳc").replace("S-III","S-Ⅲ")
     return ""
 
 
