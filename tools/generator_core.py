@@ -315,68 +315,61 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             excel.Visible = False
             excel.DisplayAlerts = False
             wb = excel.Workbooks.Open(abs_path)
-            import re as _re
 
             # 1. 改封面
             wb.Worksheets("封面").Cells(12, 2).Value = name_value
             wb.Worksheets("封面").Cells(15, 8).Value = wh_number
 
-            # 2. 提取旧桩号
-            old_b12 = str(wb.Worksheets("封面").Cells(12, 2).Value)
-            ch_m = _re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
-            if ch_m:
-                new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
-                old_nums = _re.findall(r'(\d+)\+([\d.]+)', ch_m.group())
-                old_starts = []
-                old_ends = []
-                if len(old_nums) == 2:
-                    old_starts.append(int(old_nums[0][0]) * 1000 + float(old_nums[0][1]))
-                    old_ends.append(int(old_nums[1][0]) * 1000 + float(old_nums[1][1]))
-                    old_starts.append(float(old_starts[0]) if '.' in old_nums[0][1] else int(old_starts[0]))
-                    old_ends.append(float(old_ends[0]) if '.' in old_nums[1][1] else int(old_ends[0]))
-                nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
-                nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
+            nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
+            nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
+            new_s_val = int(nsv) if nsv == int(nsv) else nsv
+            new_e_val = int(nev) if nev == int(nev) else nev
 
-                # 3. 遍历每个 sheet 每个单元格
-                for sh in wb.Worksheets:
-                    try:
-                        used = sh.UsedRange
-                        if used is None: continue
-                        # 先找"起点桩号""终点桩号"列
-                        start_col = end_col = None
-                        for r_check in range(1, min(20, used.Rows.Count + 1)):
-                            for c_check in range(1, min(30, used.Columns.Count + 1)):
-                                vv = sh.Cells(r_check, c_check).Value
-                                if vv is None: continue
-                                if isinstance(vv, str):
-                                    if '起点桩号' in vv: start_col = c_check
-                                    if '终点桩号' in vv: end_col = c_check
+            import re as _re
 
-                        for r in range(1, used.Rows.Count + 1):
-                            for c in range(1, used.Columns.Count + 1):
-                                try:
-                                    v = sh.Cells(r, c).Value
-                                    if v is None: continue
-                                    # 方法A: 替换字符串中的旧桩号文本
-                                    if isinstance(v, str) and ch_m.group() in v:
-                                        sh.Cells(r, c).Value = v.replace(ch_m.group(), new_ch)
-                                    # 方法B: 替换匹配旧值的数值
-                                    elif isinstance(v, (int, float)):
-                                        for osv in old_starts:
-                                            if abs(float(v) - float(osv)) < 0.01:
-                                                sh.Cells(r, c).Value = int(nsv) if nsv == int(nsv) else nsv
-                                        for oev in old_ends:
-                                            if abs(float(v) - float(oev)) < 0.01:
-                                                sh.Cells(r, c).Value = int(nev) if nev == int(nev) else nev
-                                    # 方法C: 在起点桩号列或终点桩号列，全部替换
-                                    if start_col and c == start_col and isinstance(v, (int, float)):
-                                        sh.Cells(r, c).Value = int(nsv) if nsv == int(nsv) else nsv
-                                    if end_col and c == end_col and isinstance(v, (int, float)):
-                                        sh.Cells(r, c).Value = int(nev) if nev == int(nev) else nev
-                                except:
-                                    pass
-                    except:
-                        pass
+            # 2. 遍历每个 sheet 每个单元格
+            for sh in wb.Worksheets:
+                try:
+                    used = sh.UsedRange
+                    if used is None: continue
+
+                    # 先找所有表头列：扫描前30行，前30列
+                    col_headers = {}  # col_number → header_text
+                    for rr in range(1, min(30, used.Rows.Count + 1)):
+                        for cc in range(1, min(30, used.Columns.Count + 1)):
+                            cv = sh.Cells(rr, cc).Value
+                            if cv is not None and isinstance(cv, str):
+                                cv_str = str(cv).strip()
+                                if '起点桩号' in cv_str:
+                                    col_headers[cc] = 'start'
+                                elif '终点桩号' in cv_str:
+                                    col_headers[cc] = 'end'
+
+                    # 遍历每个单元格
+                    for r in range(1, used.Rows.Count + 1):
+                        for c in range(1, used.Columns.Count + 1):
+                            try:
+                                v = sh.Cells(r, c).Value
+                                if v is None: continue
+
+                                # 如果是字符串，替换旧桩号文本
+                                if isinstance(v, str):
+                                    old_ch = _re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', v)
+                                    if old_ch:
+                                        new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
+                                        sh.Cells(r, c).Value = v.replace(old_ch.group(), new_ch)
+
+                                # 如果是数值，检查该列是否有表头
+                                elif isinstance(v, (int, float)):
+                                    if c in col_headers:
+                                        if col_headers[c] == 'start':
+                                            sh.Cells(r, c).Value = new_s_val
+                                        elif col_headers[c] == 'end':
+                                            sh.Cells(r, c).Value = new_e_val
+                            except:
+                                pass
+                except:
+                    pass
 
             wb.Save()
             wb.Close()
