@@ -1,15 +1,16 @@
-' 隧道工程管理系统 — 静默启动（无命令窗口）
-' 双击此文件即可启动，浏览器打开后可最小化到托盘
-
-Dim shell
+' 隧道工程管理系统 — 双击启动，无命令窗口，自动打开浏览器
+Dim shell, fs
 Set shell = CreateObject("WScript.Shell")
+Set fs = CreateObject("Scripting.FileSystemObject")
 
-' 切换到项目目录
-shell.CurrentDirectory = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
+' 切换到脚本所在目录
+shell.CurrentDirectory = fs.GetParentFolderName(WScript.ScriptFullName)
 
-' 静默运行（0=隐藏窗口）
-shell.Run "streamlit run app.py", 0, False
+' 启动 Streamlit（隐藏窗口）
+shell.Run "python -m streamlit run app.py", 0, False
 
-' 等几秒让服务启动后打开浏览器
-WScript.Sleep 5000
+' 等几秒让服务启动
+WScript.Sleep 6000
+
+' 打开浏览器
 shell.Run "http://localhost:8501"
