@@ -296,58 +296,145 @@ def generate_segment_files(
 
 def _gen_one(template_path, output_path, line, rock, sub_item,
              start_disp, end_disp, length, start_num, end_num, wh_number, ch_prefix="K"):
-    """复制模板 → 只改封面2个单元格，其余碰都不碰
+    """复制模板 → 全表查找替换桩号和编号
 
-    方法：直接操作 xlsx (zip) 内部的 XML
-    用 inlineStr 模式，不改 sharedStrings.xml，只改 sheet1.xml
+    对 xlsx 内所有 XML 文件中的旧桩号、旧编号进行全文替换，
+    确保证书、单简等所有 sheet 的桩号和编号都更新。
+    同时把封面 B12/H15 改为 inlineStr 模式。
     """
     seg_name = f"田头山隧道{line}-洞身衬砌({ch_prefix}{start_disp}～{ch_prefix}{end_disp})({length:.2f}m，{rock})"
     name_value = f"分项工程名称：{seg_name}-{sub_item}"
 
-    # 复制模板
+    import zipfile, re
+    from copy import deepcopy
+
     shutil.copy2(template_path, output_path)
 
-    import zipfile, re
-
-    # 读取 zip 全部文件
     with zipfile.ZipFile(output_path, 'r') as zin:
         all_files = {name: zin.read(name) for name in zin.namelist()}
 
-    # 找 sheet1.xml（封面）
-    sheet_path = None
+    # ── 0. 从模板中提取旧桩号、旧编号 ──
+    old_chainage = None
+    old_wh = None
+
+    ss_xml = all_files.get('xl/sharedStrings.xml', b'')
+    if ss_xml:
+        ss_texts = _parse_shared_strings(ss_xml)
+        sheet1 = all_files.get('xl/worksheets/sheet1.xml', b'').decode('utf-8')
+
+        # B12 → 旧桩号
+        m = re.search(r'<c[^>]*r="B12"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet1)
+        if m:
+            idx = int(m.group(1))
+            if idx < len(ss_texts):
+                old_b12 = ss_texts[idx]
+                # 提取桩号：K87+492.00～K87+675.00 / ZK87+492～ZK87+675
+                ch_m = re.search(r'([ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+)', old_b12)
+                if ch_m:
+                    old_chainage = ch_m.group(1)
+                # 提取旧编号
+                wh_m = re.search(r'WH3A4[\d-]+', old_b12)
+                if wh_m:
+                    old_wh = wh_m.group(0)
+
+        if not old_wh:
+            m = re.search(r'<c[^>]*r="H15"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet1)
+            if m:
+                idx = int(m.group(1))
+                if idx < len(ss_texts):
+                    wh_match = re.search(r'WH3A4[\d-]+', ss_texts[idx])
+                    if wh_match:
+                        old_wh = wh_match.group(0)
+
+    new_chainage = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
+
+    # ── 0b. 从旧桩号提取起终点数值 ──
+    old_start_num = old_end_num = None
+    if old_chainage:
+        parts = re.findall(r'(\d+)\+([\d.]+)', old_chainage)
+        if len(parts) >= 2:
+            old_start_num = int(parts[0][0]) * 1000 + int(float(parts[0][1]))
+            old_end_num = int(parts[1][0]) * 1000 + int(float(parts[1][1]))
+    new_start_num = int(start_disp.split('+')[0]) * 1000 + int(float(start_disp.split('+')[1]))
+    new_end_num = int(end_disp.split('+')[0]) * 1000 + int(float(end_disp.split('+')[1]))
+
+    # ── 1. 全表查找替换 ──
+    for name, content in all_files.items():
+        if not name.endswith('.xml'):
+            continue
+
+        text = content.decode('utf-8')
+
+        # 替换桩号（在共享字符串和 sheet xml 的文本中）
+        if old_chainage:
+            # 也替换可能的不同格式
+            for old_fmt in [old_chainage,
+                            old_chainage.replace('K', ''),
+                            old_chainage.replace('ZK', 'K').replace('YK', 'K')]:
+                if old_fmt != new_chainage and old_fmt in text:
+                    text = text.replace(old_fmt, new_chainage)
+
+        # 替换编号
+        if old_wh and old_wh != wh_number and old_wh in text:
+            text = text.replace(old_wh, wh_number)
+
+        # 替换完整分项名称中的旧桩号部分
+        if old_chainage:
+            # "K87+492.00～K87+675.00" → "K87+252.00～K87+285.00"
+            text = text.replace(old_chainage, new_chainage)
+
+        # 替换数值桩号：<v>87492</v> → <v>87252</v>
+        if old_start_num is not None and old_end_num is not None and 'worksheets/sheet' in name:
+            text = re.sub(f'<v>{old_start_num}</v>', f'<v>{new_start_num}</v>', text)
+            text = re.sub(f'<v>{old_end_num}</v>', f'<v>{new_end_num}</v>', text)
+
+        all_files[name] = text.encode('utf-8')
+
+    # ── 2. 封面 B12/H15 改为 inlineStr（确保值正确） ──
+    sheet1_path = None
     for name in all_files:
         if name.startswith('xl/worksheets/sheet') and name.endswith('.xml'):
-            sheet_path = name
+            sheet1_path = name
             break
 
-    if sheet_path:
-        xml = all_files[sheet_path].decode('utf-8')
-        modified_count = 0
-
+    if sheet1_path:
+        xml = all_files[sheet1_path].decode('utf-8')
         for ref, new_val in [('B12', name_value), ('H15', wh_number)]:
             escaped = _xml_escape(new_val)
-            # 先找到该 cell（属性顺序无关）
             cell_match = re.search(rf'<c[^>]*?r="{ref}"[^>]*?>.*?</c>', xml, re.DOTALL)
             if cell_match:
                 full_cell = cell_match.group()
-                # 把 t="s" 改为 t="inlineStr"
                 new_cell = full_cell.replace('t="s"', 't="inlineStr"', 1)
-                # 把 <v>数字</v> 或其他内容替换为 inlineStr 格式
                 new_cell = re.sub(r'>.*?</c>', f'><is><t>{escaped}</t></is></c>', new_cell, count=1, flags=re.DOTALL)
                 xml = xml.replace(full_cell, new_cell, 1)
-                modified_count += 1
-            else:
-                print(f"⚠️ _gen_one: 未找到单元格 {ref}")
-
-        if modified_count < 2:
-            print(f"⚠️ _gen_one: 只修改了 {modified_count}/2 个单元格")
-
-        all_files[sheet_path] = xml.encode('utf-8')
+        all_files[sheet1_path] = xml.encode('utf-8')
 
     # 重新打包
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in all_files.items():
             zout.writestr(name, data)
+
+
+def _parse_shared_strings(xml_bytes):
+    """从 sharedStrings.xml 提取所有文本字符串"""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(xml_bytes)
+    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    texts = []
+    for si in root.findall(f'{ns}si'):
+        # 普通文本
+        t_node = si.find(f'{ns}t')
+        if t_node is not None and t_node.text:
+            texts.append(t_node.text)
+        else:
+            # 富文本（多个 <r> 子元素）
+            parts = []
+            for r_elem in si.findall(f'{ns}r'):
+                t_elem = r_elem.find(f'{ns}t')
+                if t_elem is not None and t_elem.text:
+                    parts.append(t_elem.text)
+            texts.append(''.join(parts))
+    return texts
 
 
 def _xml_escape(text):
