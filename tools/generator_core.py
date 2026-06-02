@@ -315,6 +315,7 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
     # ── 0. 从模板中提取旧桩号、旧编号 ──
     old_chainage = None
     old_wh = None
+    ss_texts = []
 
     ss_xml = all_files.get('xl/sharedStrings.xml', b'')
     if ss_xml:
@@ -364,68 +365,53 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
     new_start_num = int(new_s) if new_s == int(new_s) else new_s
     new_end_num = int(new_e) if new_e == int(new_e) else new_e
 
-    # ── 1. 全表查找替换 ──
+    # ── 1. 全表查找替换（字符串） ──
     for name, content in all_files.items():
         if not name.endswith('.xml'):
             continue
-
         text = content.decode('utf-8')
 
-        # 替换桩号（在共享字符串和 sheet xml 的文本中）
         if old_chainage:
-            # 也替换可能的不同格式
-            for old_fmt in [old_chainage,
-                            old_chainage.replace('K', ''),
-                            old_chainage.replace('ZK', 'K').replace('YK', 'K')]:
-                if old_fmt != new_chainage and old_fmt in text:
-                    text = text.replace(old_fmt, new_chainage)
-
-        # 替换编号
-        if old_wh and old_wh != wh_number and old_wh in text:
+            text = text.replace(old_chainage, new_chainage)
+        if old_wh and old_wh != wh_number:
             text = text.replace(old_wh, wh_number)
 
-        # 替换完整分项名称中的旧桩号部分
-        if old_chainage:
-            # "K87+492.00～K87+675.00" → "K87+252.00～K87+285.00"
-            text = text.replace(old_chainage, new_chainage)
+        all_files[name] = text.encode('utf-8')
 
-        # 按表头找数值桩号：找到"起点桩号""终点桩号"所在列，替换其下方数值
-        if 'worksheets/sheet' in name and ss_texts:
-            # 解析 sheet XML 中的 cell 引用和值
-            sheet_xml = text
-            # 先用 shared strings 翻译表头
-            header_cols = {}  # col_letter → type ('start' or 'end')
-            for m_cell in re.finditer(r'<c[^>]*r="([A-Z]+)(\d+)"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', sheet_xml):
-                col, row, ss_idx = m_cell.group(1), int(m_cell.group(2)), int(m_cell.group(3))
-                if ss_idx < len(ss_texts):
-                    txt = ss_texts[ss_idx]
-                    if '起点桩号' in txt or '起点' in txt:
-                        header_cols[col] = 'start'
-                    elif '终点桩号' in txt or '终点' in txt:
-                        header_cols[col] = 'end'
+    # ── 2. 按表头列替换数值桩号 ──
+    # 找出哪些列是起点/终点桩号，然后把该列所有数值都替换
+    new_s_str = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
+    new_e_str = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
 
-            if header_cols:
-                new_s = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
-                new_e = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
-                old_vals = [
-                    str(old_start_float) if old_start_float is not None else '',
-                    str(int(old_start_float)) if old_start_float is not None and old_start_float == int(old_start_float) else '',
-                    str(old_end_float) if old_end_float is not None else '',
-                    str(int(old_end_float)) if old_end_float is not None and old_end_float == int(old_end_float) else '',
-                ]
-                for col, typ in header_cols.items():
-                    new_val = new_s if typ == 'start' else new_e
-                    # 全列替换：跳过 t="s"(共享字符串)，只改数值型单元格
-                    def _replace_col_val(m):
-                        if 't="s"' in m.group(0):
-                            return m.group(0)  # 共享字符串不改
-                        return m.group(1) + str(new_val) + m.group(2)
-                    sheet_xml = re.sub(
-                        rf'(<c[^>]*r="{col}\d+"[^>]*?>.*?<v>)\d+\.?\d*(</v>)',
-                        _replace_col_val,
-                        sheet_xml
-                    )
-                text = sheet_xml
+    for name in list(all_files.keys()):
+        if 'worksheets/sheet' not in name or not name.endswith('.xml'):
+            continue
+        text = all_files[name].decode('utf-8')
+
+        # 找表头：遍历所有 t="s" 的单元格，看内容是否匹配
+        col_map = {}
+        for m in re.finditer(r'<c[^>]*r="([A-Z]+)(\d+)"[^>]*t="s"[^>]*?>.*?<v>(\d+)</v>', text):
+            col_letter = m.group(1)
+            ss_idx = int(m.group(3))
+            if ss_idx < len(ss_texts):
+                txt = ss_texts[ss_idx]
+                if '起点桩号' in txt:
+                    col_map[col_letter] = 'start'
+                elif '终点桩号' in txt:
+                    col_map[col_letter] = 'end'
+
+        if col_map:
+            # 对起点/终点列：所有数值型单元格（不含 t="s"）都替换
+            for col_letter, typ in col_map.items():
+                new_val = new_s_str if typ == 'start' else new_e_str
+                # 用 lambda 保证不处理共享字符串单元格
+                def _replacer(m, nv=new_val):
+                    return m.group(1) + nv + m.group(2) if 't="s"' not in m.group(0) else m.group(0)
+                text = re.sub(
+                    rf'(<c[^>]*r="{col_letter}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)',
+                    _replacer,
+                    text
+                )
 
         all_files[name] = text.encode('utf-8')
 
