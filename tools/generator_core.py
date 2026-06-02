@@ -415,17 +415,16 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
                 ]
                 for col, typ in header_cols.items():
                     new_val = new_s if typ == 'start' else new_e
-                    # 旧值的两种格式：87492.0 和 87492
-                    old_candidates = [
-                        old_vals[0] if typ == 'start' else old_vals[2],  # 浮点格式
-                        old_vals[1] if typ == 'start' else old_vals[3],  # 整数格式
-                    ]
-                    for old_val in set(v for v in old_candidates if v):
-                        sheet_xml = re.sub(
-                            rf'(<c[^>]*r="{col}\d+"[^>]*?>.*?<v>){re.escape(old_val)}(</v>)',
-                            lambda m: m.group(1) + str(new_val) + m.group(2),
-                            sheet_xml
-                        )
+                    # 全列替换：跳过 t="s"(共享字符串)，只改数值型单元格
+                    def _replace_col_val(m):
+                        if 't="s"' in m.group(0):
+                            return m.group(0)  # 共享字符串不改
+                        return m.group(1) + str(new_val) + m.group(2)
+                    sheet_xml = re.sub(
+                        rf'(<c[^>]*r="{col}\d+"[^>]*?>.*?<v>)\d+\.?\d*(</v>)',
+                        _replace_col_val,
+                        sheet_xml
+                    )
                 text = sheet_xml
 
         all_files[name] = text.encode('utf-8')
