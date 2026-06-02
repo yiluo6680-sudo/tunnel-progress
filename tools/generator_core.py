@@ -307,7 +307,7 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
     shutil.copy2(template_path, output_path)
     abs_path = os.path.abspath(output_path)
 
-    # ── Windows: 用 Excel 自身修改，格式零改动 ──
+    # ── Windows: 用 Excel 自身修改 ──
     if sys.platform == 'win32':
         try:
             import win32com.client as win32
@@ -315,55 +315,75 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             excel.Visible = False
             excel.DisplayAlerts = False
             wb = excel.Workbooks.Open(abs_path)
+            import re as _re
 
-            # 封面 B12/H15
-            ws = wb.Worksheets("封面")
-            ws.Cells(12, 2).Value = name_value
-            ws.Cells(15, 8).Value = wh_number
+            # 1. 改封面
+            wb.Worksheets("封面").Cells(12, 2).Value = name_value
+            wb.Worksheets("封面").Cells(15, 8).Value = wh_number
 
-            # 提取旧桩号字符串
-            old_b12 = str(ws.Cells(12, 2).Value)
-            __import__('re')
-            import re
-            ch_m = re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
+            # 2. 提取旧桩号
+            old_b12 = str(wb.Worksheets("封面").Cells(12, 2).Value)
+            ch_m = _re.search(r'[ZY]?K\d+\+[\d.]+～[ZY]?K\d+\+[\d.]+', old_b12)
             if ch_m:
                 new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
-                # 全表替换旧桩号字符串
-                for sh in wb.Worksheets:
-                    sh.Cells.Replace(What=ch_m.group(), Replacement=new_ch, LookAt=1)
+                old_nums = _re.findall(r'(\d+)\+([\d.]+)', ch_m.group())
+                old_starts = []
+                old_ends = []
+                if len(old_nums) == 2:
+                    old_starts.append(int(old_nums[0][0]) * 1000 + float(old_nums[0][1]))
+                    old_ends.append(int(old_nums[1][0]) * 1000 + float(old_nums[1][1]))
+                    old_starts.append(float(old_starts[0]) if '.' in old_nums[0][1] else int(old_starts[0]))
+                    old_ends.append(float(old_ends[0]) if '.' in old_nums[1][1] else int(old_ends[0]))
+                nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
+                nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
 
-            # 遍历所有 sheet，找到"起点桩号""终点桩号"列，整列替换数值
-            nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
-            nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
-            for sh in wb.Worksheets:
-                used = sh.UsedRange
-                # 找表头行和列
-                start_col = None
-                end_col = None
-                for r in range(1, used.Rows.Count + 1):
-                    for c in range(1, used.Columns.Count + 1):
-                        v = sh.Cells(r, c).Value
-                        if v is None: continue
-                        sv = str(v)
-                        if '起点桩号' in sv: start_col = c
-                        if '终点桩号' in sv: end_col = c
-                # 替换这些列所有数值（跳过表头行）
-                for r in range(1, used.Rows.Count + 1):
-                    if start_col:
-                        cv = sh.Cells(r, start_col).Value
-                        if cv is not None and isinstance(cv, (int, float)):
-                            sh.Cells(r, start_col).Value = nsv
-                    if end_col:
-                        cv = sh.Cells(r, end_col).Value
-                        if cv is not None and isinstance(cv, (int, float)):
-                            sh.Cells(r, end_col).Value = nev
+                # 3. 遍历每个 sheet 每个单元格
+                for sh in wb.Worksheets:
+                    try:
+                        used = sh.UsedRange
+                        if used is None: continue
+                        # 先找"起点桩号""终点桩号"列
+                        start_col = end_col = None
+                        for r_check in range(1, min(20, used.Rows.Count + 1)):
+                            for c_check in range(1, min(30, used.Columns.Count + 1)):
+                                vv = sh.Cells(r_check, c_check).Value
+                                if vv is None: continue
+                                if isinstance(vv, str):
+                                    if '起点桩号' in vv: start_col = c_check
+                                    if '终点桩号' in vv: end_col = c_check
+
+                        for r in range(1, used.Rows.Count + 1):
+                            for c in range(1, used.Columns.Count + 1):
+                                try:
+                                    v = sh.Cells(r, c).Value
+                                    if v is None: continue
+                                    # 方法A: 替换字符串中的旧桩号文本
+                                    if isinstance(v, str) and ch_m.group() in v:
+                                        sh.Cells(r, c).Value = v.replace(ch_m.group(), new_ch)
+                                    # 方法B: 替换匹配旧值的数值
+                                    elif isinstance(v, (int, float)):
+                                        for osv in old_starts:
+                                            if abs(float(v) - float(osv)) < 0.01:
+                                                sh.Cells(r, c).Value = int(nsv) if nsv == int(nsv) else nsv
+                                        for oev in old_ends:
+                                            if abs(float(v) - float(oev)) < 0.01:
+                                                sh.Cells(r, c).Value = int(nev) if nev == int(nev) else nev
+                                    # 方法C: 在起点桩号列或终点桩号列，全部替换
+                                    if start_col and c == start_col and isinstance(v, (int, float)):
+                                        sh.Cells(r, c).Value = int(nsv) if nsv == int(nsv) else nsv
+                                    if end_col and c == end_col and isinstance(v, (int, float)):
+                                        sh.Cells(r, c).Value = int(nev) if nev == int(nev) else nev
+                                except:
+                                    pass
+                    except:
+                        pass
 
             wb.Save()
             wb.Close()
             excel.Quit()
             return
-        except ImportError:
-            pass  # 没有 win32com → zipfile 方案
+        except Exception:
+            pass  # 失败则 fallback
 
     # ── macOS / fallback ──
     _gen_one_zip(template_path, output_path, line, rock, sub_item,
