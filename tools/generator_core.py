@@ -347,15 +347,22 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
 
     new_chainage = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
 
-    # ── 0b. 从旧桩号提取起终点数值 ──
+    # ── 0b. 从旧桩号提取起终点数值（保留小数，匹配int/float两种格式） ──
     old_start_num = old_end_num = None
+    old_start_float = old_end_float = None
     if old_chainage:
         parts = re.findall(r'(\d+)\+([\d.]+)', old_chainage)
         if len(parts) >= 2:
-            old_start_num = int(parts[0][0]) * 1000 + int(float(parts[0][1]))
-            old_end_num = int(parts[1][0]) * 1000 + int(float(parts[1][1]))
-    new_start_num = int(start_disp.split('+')[0]) * 1000 + int(float(start_disp.split('+')[1]))
-    new_end_num = int(end_disp.split('+')[0]) * 1000 + int(float(end_disp.split('+')[1]))
+            s_val = int(parts[0][0]) * 1000 + float(parts[0][1])
+            e_val = int(parts[1][0]) * 1000 + float(parts[1][1])
+            old_start_float = s_val
+            old_end_float = e_val
+            old_start_num = int(s_val) if s_val == int(s_val) else s_val
+            old_end_num = int(e_val) if e_val == int(e_val) else e_val
+    new_s = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
+    new_e = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
+    new_start_num = int(new_s) if new_s == int(new_s) else new_s
+    new_end_num = int(new_e) if new_e == int(new_e) else new_e
 
     # ── 1. 全表查找替换 ──
     for name, content in all_files.items():
@@ -382,10 +389,14 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
             # "K87+492.00～K87+675.00" → "K87+252.00～K87+285.00"
             text = text.replace(old_chainage, new_chainage)
 
-        # 替换数值桩号：<v>87492</v> → <v>87252</v>
-        if old_start_num is not None and old_end_num is not None and 'worksheets/sheet' in name:
-            text = re.sub(f'<v>{old_start_num}</v>', f'<v>{new_start_num}</v>', text)
-            text = re.sub(f'<v>{old_end_num}</v>', f'<v>{new_end_num}</v>', text)
+        # 替换数值桩号（int: 87492 / float: 87671.5）
+        if old_start_float is not None and 'worksheets/sheet' in name:
+            new_s = str(int(new_start_num)) if isinstance(new_start_num, float) and new_start_num == int(new_start_num) else str(new_start_num)
+            new_e = str(int(new_end_num)) if isinstance(new_end_num, float) and new_end_num == int(new_end_num) else str(new_end_num)
+            for ov in set([str(old_start_float), str(int(old_start_float))]):
+                text = re.sub(f'<v>{re.escape(ov)}</v>', new_s, text, flags=re.IGNORECASE)
+            for ov in set([str(old_end_float), str(int(old_end_float))]):
+                text = re.sub(f'<v>{re.escape(ov)}</v>', new_e, text, flags=re.IGNORECASE)
 
         all_files[name] = text.encode('utf-8')
 
