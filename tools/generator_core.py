@@ -347,32 +347,65 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
         all_files[name] = text.encode('utf-8')
 
     # ── 按表头列替换数值 ──
-    # 先找出"起点桩号""终点桩号"在 sharedStrings 中的索引
+    # 找"起点桩号""终点桩号"在 sharedStrings 中的索引
     ss_xml = all_files.get('xl/sharedStrings.xml', b'')
     start_idx = end_idx = None
     if ss_xml:
         import xml.etree.ElementTree as ET
-        ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+        ns_s = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
         root = ET.fromstring(ss_xml)
-        for i, si in enumerate(root.findall(f'{ns}si')):
-            t = si.find(f'{ns}t')
+        for i, si in enumerate(root.findall(f'{ns_s}si')):
+            t = si.find(f'{ns_s}t')
             txt = t.text if t is not None else ''
             if '起点桩号' in txt: start_idx = i
             if '终点桩号' in txt: end_idx = i
 
-    # 在每张 sheet 中找这些索引所在的列
+    # ── 用 ElementTree 精确解析 sheet，替换表头列数值 ──
+    import xml.etree.ElementTree as ET
+    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+
     for name in all_files:
         if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
-        text = all_files[name].decode('utf-8')
-        for idx, new_val, label in [(start_idx, new_s, 'start'), (end_idx, new_e, 'end')]:
-            if idx is None: continue
-            m = re.search(rf'<c[^>]*r="([A-Z]+)\d+"[^>]*t="s"[^>]*?><v>{idx}</v>', text)
-            if m:
-                col_letter = m.group(1)
-                def _repl(m, nv=new_val):
-                    return m.group(1) + nv + m.group(2) if 't="s"' not in m.group(0) else m.group(0)
-                text = re.sub(rf'(<c[^>]*r="{col_letter}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _repl, text)
-        all_files[name] = text.encode('utf-8')
+        try:
+            root = ET.fromstring(all_files[name])
+            sd = root.find(f'{ns}sheetData')
+            if sd is None: continue
+            # 记录找到的列
+            cols = {}  # col_letter → 'start' or 'end'
+            for row in sd.findall(f'{ns}row'):
+                for c in row.findall(f'{ns}c'):
+                    v_el = c.find(f'{ns}v')
+                    if v_el is not None and v_el.text and c.get('t') == 's' and v_el.text.strip().isdigit():
+                        idx = int(v_el.text)
+                        col_letter = re.match(r'([A-Z]+)', c.get('r', '')).group(1)
+                        if idx == start_idx: cols[col_letter] = 'start'
+                        elif idx == end_idx: cols[col_letter] = 'end'
+
+            if cols:
+                # 重新遍历，替换数值
+                for row in sd.findall(f'{ns}row'):
+                    for c in row.findall(f'{ns}c'):
+                        ref = c.get('r', '')
+                        cl = re.match(r'([A-Z]+)', ref).group(1)
+                        if cl in cols and c.get('t') != 's':
+                            v_el = c.find(f'{ns}v')
+                            if v_el is not None and v_el.text and re.match(r'[\d.]+$', v_el.text):
+                                nv = new_s if cols[cl] == 'start' else new_e
+                                v_el.text = nv
+
+            all_files[name] = ET.tostring(root, xml_declaration=True, encoding='UTF-8')
+        except:
+            # 如果 ElementTree 解析失败，用原来方法
+            text = all_files[name].decode('utf-8')
+            for idx, nv in [(start_idx, new_s), (end_idx, new_e)]:
+                if idx is None: continue
+                m = re.search(rf'<c[^>]*r="([A-Z]+)\d+"[^>]*t="s"[^>]*?><v>{idx}</v>', text)
+                if m:
+                    cl = m.group(1)
+                    def _r2(m2, nv2=nv):
+                        return m2.group(1) + nv2 + m2.group(2) if 't="s"' not in m2.group(0) else m2.group(0)
+                    text = re.sub(rf'(<c[^>]*r="{cl}\d+"[^>]*?>.*?<v>)[\d.]+(</v>)', _r2, text)
+            all_files[name] = text.encode('utf-8')
 
     # ── 封面 B12/H15 改为 inlineStr ──
     s1_path = next((n for n in all_files if 'worksheets/sheet' in n and n.endswith('.xml')), None)
