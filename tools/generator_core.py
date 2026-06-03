@@ -300,69 +300,75 @@ def generate_segment_files(
 
 def _gen_one(template_path, output_path, line, rock, sub_item,
              start_disp, end_disp, length, start_num, end_num, wh_number, ch_prefix="K"):
-    """复制模板 → 替换桩号/编号（不依赖旧值匹配）
+    """复制模板 → 替换桩号/编号
 
-    两条路：
-    1. 共享字符串中含桩号区间 → 替换为新区间
-    2. 每行数值>=50000的 → 第一个换新起点，第二个换新终点
+    Windows: 调用 VBS → Excel 自身修改（格式不变）
+    macOS:   zipfile 直接操作 XML
     """
-    import shutil, os, re, zipfile
+    import shutil, os, sys
     seg_name = f"田头山隧道{line}-洞身衬砌({ch_prefix}{start_disp}～{ch_prefix}{end_disp})({length:.2f}m，{rock})"
     name_value = f"分项工程名称：{seg_name}-{sub_item}"
-
-    shutil.copy2(template_path, output_path)
-    with zipfile.ZipFile(output_path, 'r') as zin:
-        all_files = {n: zin.read(n) for n in zin.namelist()}
 
     nsv = float(start_disp.split('+')[0]) * 1000 + float(start_disp.split('+')[1])
     nev = float(end_disp.split('+')[0]) * 1000 + float(end_disp.split('+')[1])
     new_s = str(int(nsv)) if nsv == int(nsv) else str(nsv)
     new_e = str(int(nev)) if nev == int(nev) else str(nev)
+
+    # ── Windows: 调用 Excel VBS ──
+    if sys.platform == 'win32':
+        try:
+            shutil.copy2(template_path, output_path)
+            vbs_path = os.path.join(os.path.dirname(__file__), 'excel_helper.vbs')
+            import subprocess
+            subprocess.run([
+                'cscript.exe', '//Nologo', vbs_path,
+                os.path.abspath(template_path),
+                os.path.abspath(output_path),
+                new_s, new_e, wh_number, name_value
+            ], check=True, capture_output=True)
+            return
+        except Exception:
+            pass  # fallback
+
+    # ── macOS: zipfile 方案 ──
+    import zipfile, re
+    shutil.copy2(template_path, output_path)
+    with zipfile.ZipFile(output_path, 'r') as zin:
+        all_files = {n: zin.read(n) for n in zin.namelist()}
+
     new_ch = f"{ch_prefix}{start_disp}～{ch_prefix}{end_disp}"
 
-    # ── 1. 全表替换含桩号区间的文本 ──
+    # 全表替换含桩号区间的文本
     ch_pat = r'[ZY]?K\d+\+[\d.]+[～~][ZY]?K\d+\+[\d.]+'
     for name in all_files:
         if not name.endswith('.xml'): continue
         text = all_files[name].decode('utf-8')
         text = re.sub(ch_pat, new_ch, text)
-        # 也替换编号
         text = re.sub(r'WH3A4[\d-]+', wh_number, text)
         all_files[name] = text.encode('utf-8')
 
-    # ── 2. 每行数值>=50000的替换（不依赖列名） ──
+    # 每行数值>=50000替换（按行切分）
     for name in all_files:
         if 'worksheets/sheet' not in name or not name.endswith('.xml'): continue
-        if 'worksheets/sheet1.xml' in name: continue
+        if 'sheet1.xml' in name: continue
         text = all_files[name].decode('utf-8')
-
-        # 按行切分
         rows = re.split(r'(<row[^>]*?>)', text)
-        new_rows = []
-        for part in rows:
-            if part.startswith('<row '):
-                new_rows.append(part)
-            elif '<c ' in part and '<v>' in part:
-                count = 0
-                def _rpl(m):
-                    nonlocal count
-                    try:
-                        if float(m.group(2)) >= 50000:
-                            count += 1
-                            if count == 1: return m.group(1) + new_s + m.group(3)
-                            if count == 2: return m.group(1) + new_e + m.group(3)
-                    except: pass
+        for i, part in enumerate(rows):
+            if not part.startswith('<row ') and '<c ' in part and '<v>' in part:
+                cnt = 0
+                def _rp(m, c=[0]):
+                    if float(m.group(2)) >= 50000:
+                        c[0] += 1
+                        if c[0] == 1: return m.group(1) + new_s + m.group(3)
+                        if c[0] == 2: return m.group(1) + new_e + m.group(3)
                     return m.group(0)
-                part = re.sub(r'(<c[^>]*?>.*?<v>)([\d.]+)(</v>)', _rpl, part)
-                new_rows.append(part)
-            else:
-                new_rows.append(part)
-        all_files[name] = (''.join(new_rows)).encode('utf-8')
+                rows[i] = re.sub(r'(<c[^>]*?>.*?<v>)([\d.]+)(</v>)', _rp, part)
+        all_files[name] = (''.join(rows)).encode('utf-8')
 
-    # ── 3. 封面 B12/H15 改为 inlineStr ──
-    s1_path = next((n for n in all_files if 'worksheets/sheet' in n and n.endswith('.xml') and 'sheet1' in n), None)
-    if s1_path:
-        xml = all_files[s1_path].decode('utf-8')
+    # 封面 inlineStr
+    s1 = next((n for n in all_files if 'worksheets/sheet' in n and 'sheet1' in n), None)
+    if s1:
+        xml = all_files[s1].decode('utf-8')
         for ref, nv in [('B12', name_value), ('H15', wh_number)]:
             ev = _xml_escape(nv)
             m = re.search(rf'<c[^>]*?r="{ref}"[^>]*?>.*?</c>', xml, re.DOTALL)
@@ -370,7 +376,7 @@ def _gen_one(template_path, output_path, line, rock, sub_item,
                 nc = m.group().replace('t="s"', 't="inlineStr"', 1)
                 nc = re.sub(r'>.*?</c>', f'><is><t>{ev}</t></is></c>', nc, count=1, flags=re.DOTALL)
                 xml = xml.replace(m.group(), nc, 1)
-        all_files[s1_path] = xml.encode('utf-8')
+        all_files[s1] = xml.encode('utf-8')
 
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in all_files.items():
